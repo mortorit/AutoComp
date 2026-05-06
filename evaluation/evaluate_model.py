@@ -4,9 +4,12 @@ from PIL import Image
 import wandb
 import open_clip
 from transformers import SiglipProcessor, SiglipModel
+import sys
+from pathlib import Path
 
-# Import from our new unified benchmark module
-from hf_benchmark import load_hf_dataset, run_benchmarks
+sys.path.append(str(Path(__file__).resolve().parents[1]))
+from autocomp_tasks import TASK_CHOICES, normalize_caption_source, normalize_task_type
+from hf_benchmarks import load_hf_dataset, run_benchmarks
 
 class ModelWrapper:
     """Base class for model wrappers."""
@@ -46,6 +49,7 @@ class SigLIPWrapper(ModelWrapper):
     """Wraps a Hugging Face SigLIP model."""
     def __init__(self, model_name, device=None):
         super().__init__(model_name, device)
+        self.text_max_length = 128
         self.processor = SiglipProcessor.from_pretrained(model_name, max_position_embeddings=128)
         self.model = SiglipModel.from_pretrained(model_name).to(self.device)
         self.model.eval()
@@ -74,9 +78,20 @@ def main():
 
     # Data arguments
     parser.add_argument("--hf_repo_id", type=str, required=True, help="Hugging Face repo ID of the dataset.")
-    parser.add_argument("--task_type", type=str, required=True, choices=['color', 'position'], help="Benchmark task type.")
+    parser.add_argument(
+        "--task_type",
+        type=normalize_task_type,
+        required=True,
+        choices=TASK_CHOICES,
+        help="Benchmark task type: color, shape_color, position, or relative_size.",
+    )
     parser.add_argument("--num_objects", type=int, required=True, help="Number of objects (N) to filter the dataset for.")
-    parser.add_argument("--caption_source", type=str, default='handmade', choices=['handmade', 'llm'], help="Caption source to evaluate.")
+    parser.add_argument(
+        "--caption_source",
+        type=normalize_caption_source,
+        default='minimal',
+        help="Caption source to evaluate: minimal/handmade or contextual/llm.",
+    )
     
     # Evaluation arguments
     parser.add_argument("--batch_size", type=int, default=32)

@@ -1,52 +1,57 @@
 # Auto-Comp Pipeline: Code Supplement
 
-This repository contains the official implementation for the paper "Auto-Comp: An Automated Pipeline for Scalable Compositional Probing of Contrastive Vision-Language Models". It includes all scripts required to generate the benchmarks and reproduce our results.
+This repository contains the anonymized code supplement for the Auto-Comp pipeline, a concept-driven benchmark generator for compositional probing of contrastive vision-language models. The implementation supports the four benchmark families described in the paper:
+
+| Task type | Binding family | Vocabulary used | Attribute/relation slots |
+| --- | --- | --- | --- |
+| `color` | Attribute binding | real objects + colors | `N` colors |
+| `shape_color` | Attribute binding | geometric shapes + colors | `N` colors |
+| `position` | Relational binding | real objects + spatial relations | `N - 1` relations |
+| `relative_size` | Relational binding | real objects + size relations | `N - 1` relations |
+
+The code generalizes through the shared task registry in `autocomp_tasks.py`. To add another benchmark family, define a new task spec with an object/shape vocabulary, an attribute or relation vocabulary, and a binding type (`attribute` or `relational`). The generation, filtering, Swap, and Confusion logic will then use the correct slot count and hard-negative protocol.
 
 ## Benchmarks on Hugging Face
 
-All generated benchmark datasets (**Auto-Comp-CP**) are available for immediate use on the Hugging Face Hub at the following organization URL:
+Generated benchmark datasets can be hosted on the Hugging Face Hub. The default evaluation configuration assumes this naming pattern:
 
-[https://huggingface.co/AutoComp](https://huggingface.co/AutoComp)
+```text
+AutoComp/AutoComp-{Minimal|Contextual|Paired}-N{2|3}-{C|SC|P|RS}
+```
 
-## Setup and Requirements
+If your anonymized dataset repository names differ, edit `BENCHMARK_CONFIGS` in `evaluation/evaluate_all_models.py`.
 
-1.  **Clone this repository:**
-    ```bash
-    git clone [URL_TO_YOUR_ANONYMOUS_REPO]
-    cd [REPO_NAME]
-    ```
-2.  **Create a virtual environment** (recommended):
-    ```bash
-    python -m venv venv
-    source venv/bin/activate
-    ```
-3.  **Install dependencies:**
-    ```bash
-    pip install -r requirements.txt
-    ```
+## Setup
+
+```bash
+git clone [URL_TO_ANONYMOUS_REPO]
+cd [REPO_NAME]
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+On Windows, use the appropriate virtual-environment activation command for your shell.
 
 ## Benchmark Generation Pipeline
 
-The pipeline consists of three main stages. The scripts are designed to be run in order, with the output of one stage serving as the input for the next.
+The pipeline has three required stages and one optional hard-negative materialization stage. Scripts accept `minimal`/`contextual` as paper terminology and `handmade`/`llm` as legacy file-name aliases.
 
 ### Step 1: Generate Captions
 
-Use the unified `generate_captions.py` script to create the paired Minimal (handmade) and Contextual (LLM) captions.
-
-**Usage:**
 ```bash
 cd generation
-python generate_captions.py --task_type [color|position] --num_objects [N] --num_captions [TOTAL] --output_file [path/to/captions.json]
+python generate_captions.py \
+    --task_type [color|shape_color|position|relative_size] \
+    --num_objects [N] \
+    --num_captions [TOTAL] \
+    --output_file [path/to/captions.json]
 ```
-* `--task_type`: Specify `color` for attribute binding or `position` for relational binding.
-* `--num_objects`: The number of objects (e.g., 2 or 3).
-* `--num_captions`: The total number of initial concepts to generate.
+
+For attribute-binding tasks (`color`, `shape_color`), each concept has `N` attributes. For relational tasks (`position`, `relative_size`), each concept has `N - 1` chained relations.
 
 ### Step 2: Generate Images
 
-Use the `generate_images.py` script to generate images from the captions created in Step 1. This script is designed for distributed generation across multiple GPUs.
-
-**Usage (example for one of four GPUs):**
 ```bash
 cd generation
 python generate_images.py \
@@ -56,68 +61,69 @@ python generate_images.py \
     --total_segments 4
 ```
 
+The script writes Minimal images to `handmade/` and Contextual images to `llm/`, using the historical file suffixes expected by the filtering scripts.
+
 ### Step 3: Validate Generated Data
 
-Validation is a two-part process.
+Object presence and optional Minimal background validation:
 
-**Part A: Object Presence & Background Check**
+```bash
+cd filtering
+python evaluate_object_presence.py \
+    --input_json [path/to/captions.json] \
+    --image_folder [path/to/generated/images/handmade] \
+    --caption_type minimal \
+    --output_json [path/to/object_presence_verified.json] \
+    --check_background
+```
 
-This step uses GroundedSAM2. Its environment is best managed via Docker, as recommended by the official repository.
+Attribute or relation correctness validation:
 
-1.  **Clone the GroundedSAM2 repository:**
-    ```bash
-    git clone [https://github.com/IDEA-Research/Grounded-Segment-Anything-2.git](https://github.com/IDEA-Research/Grounded-Segment-Anything-2.git)
-    ```
-2.  **Copy our script into their directory:**
-    ```bash
-    cp filtering/evaluate_object_presence.py Grounded-Segment-Anything-2/
-    ```
-3.  **Build and run their Docker container:** (Follow instructions in the GroundedSAM2 README)
-    ```bash
-    cd Grounded-Segment-Anything-2
-    # ... commands to build and run docker ...
-    ```
-4.  **Run the script inside the Docker container:**
-    ```bash
-    python evaluate_object_presence.py \
-        --input_json [path/to/captions.json] \
-        --image_folder [path/to/generated/images/handmade] \
-        --caption_type handmade \
-        --output_json [path/to/object_presence_verified.json] \
-        --check_background # Add this flag only for Minimal (handmade) images
-    ```
-
-**Part B: Attribute Correctness Check (VQA)**
-
-This script takes the JSON file from the previous step and performs the final VQA check.
-
-**Usage:**
 ```bash
 cd filtering
 python validate_attributes_vqa.py \
     --input_json [path/to/object_presence_verified.json] \
     --image_folder [path/to/generated/images/handmade] \
-    --caption_type handmade \
-    --task_type [color|position] \
+    --caption_type minimal \
+    --task_type [color|shape_color|position|relative_size] \
     --output_json [path/to/fully_validated_data.json]
 ```
 
-### Step 4 (Optional): Offline Hard Negative Generation
-Our main evaluation scripts generate hard negatives in real-time for efficiency. However, we also provide a script to generate all Swap and Confusion negatives offline and save them to a new JSON file. This is useful for creating a complete, self-contained benchmark file.
+Use `--caption_type contextual` and the `llm/` image folder for Contextual images. Keep `--check_background` only for Minimal images.
+
+### Step 4: Optional Offline Hard Negatives
+
+The evaluation scripts generate negatives in real time. To store them in JSON instead:
+
 ```bash
 cd generation
 python generate_swap_confusion.py \
     --input_json [path/to/fully_validated_data.json] \
     --output_json [path/to/data_with_negatives.json] \
-    --task_type [color|position]
+    --task_type [color|shape_color|position|relative_size] \
+    --caption_source minimal
 ```
 
-## Evaluation Scripts
+Swap negatives use `N! - 1` permutations. Attribute-binding tasks permute attributes over fixed objects/shapes; relational tasks permute objects over fixed relations. Confusion candidates are generated with replacement from the same concept vocabulary, using `N^(2N)` candidates for attribute binding and `N^N * (N - 1)^(N - 1)` candidates for relational binding, including the positive caption.
 
-To reproduce the evaluation results from the paper, use the `run_all_evals.py` script. You must first configure the `BENCHMARK_CONFIGS` and `MODELS_TO_EVALUATE` lists at the top of the script with the desired Hugging Face repo IDs and model names.
+## Evaluation
+
+Configure model and dataset lists in `evaluation/evaluate_all_models.py`, then run:
+
 ```bash
 cd evaluation
-# This will loop through all configured models and benchmarks
 python evaluate_all_models.py
 ```
-This will call `evaluate_model.py` for each configuration, which in turn uses the real-time `hf_benchmark.py` module to generate negatives and compute scores.
+
+For a single benchmark:
+
+```bash
+cd evaluation
+python evaluate_model.py \
+    --model_family [clip|siglip] \
+    --model_name [MODEL_NAME_OR_HF_ID] \
+    --hf_repo_id [DATASET_REPO_ID] \
+    --task_type [color|shape_color|position|relative_size] \
+    --num_objects [2|3] \
+    --caption_source [minimal|contextual]
+```

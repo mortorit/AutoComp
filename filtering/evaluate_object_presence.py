@@ -18,6 +18,21 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+CAPTION_TYPE_ALIASES = {
+    "minimal": "handmade",
+    "handmade": "handmade",
+    "contextual": "llm",
+    "llm": "llm",
+}
+
+
+def normalize_caption_type(caption_type: str) -> str:
+    key = caption_type.strip().lower().replace("-", "_").replace(" ", "_")
+    if key not in CAPTION_TYPE_ALIASES:
+        raise ValueError("caption_type must be minimal/handmade or contextual/llm")
+    return CAPTION_TYPE_ALIASES[key]
+
+
 class ObjectPresenceEvaluator:
     """
     Evaluates object presence and optionally background whiteness in images
@@ -94,7 +109,8 @@ class ObjectPresenceEvaluator:
             if image_id is None or objects is None:
                 continue
 
-            image_path = Path(args.image_folder) / f"concept_{image_id:05d}_{args.caption_type}.webp"
+            caption_type = normalize_caption_type(args.caption_type)
+            image_path = Path(args.image_folder) / f"concept_{image_id:05d}_{caption_type}.webp"
             if not image_path.exists():
                 continue
 
@@ -155,7 +171,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate object presence and optional background whiteness in generated images.")
     parser.add_argument("--input_json", type=str, required=True, help="Path to the input JSON file.")
     parser.add_argument("--image_folder", type=str, required=True, help="Path to the folder containing images.")
-    parser.add_argument("--caption_type", type=str, required=True, choices=['handmade', 'llm'], help="Image set to evaluate.")
+    parser.add_argument("--caption_type", type=normalize_caption_type, required=True, help="Image set to evaluate: minimal/handmade or contextual/llm.")
     parser.add_argument("--output_json", type=str, required=True, help="Path to save the verified JSON file.")
     parser.add_argument("--check_background", action='store_true', help="Enable the white background check (for Minimal images).")
     args = parser.parse_args()

@@ -6,6 +6,7 @@ import json
 import argparse
 import math
 import logging
+from tqdm import tqdm
 
 # --- Setup Logging ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -19,7 +20,7 @@ def parse_arguments():
     parser.add_argument("--input_json", type=str, required=True,
                         help="Path to the input JSON file containing the captions.")
     parser.add_argument("--output_dir", type=str, required=True,
-                        help="Base directory to save the output images. 'handmade' and 'llm' subfolders will be created here.")
+                        help="Base directory to save output images. 'handmade' (Minimal) and 'llm' (Contextual) subfolders will be created here.")
 
     # Distribution/Batching Arguments
     parser.add_argument("--segment_index", type=int, required=True,
@@ -121,8 +122,8 @@ def main():
     prompts_batch, paths_batch, seeds_batch = [], [], []
     for item in tqdm(segment_data, desc=f"Segment {args.segment_index}"):
         concept_id = f"concept_{item.get('id', 'unknown'):05d}"
-        handmade_caption = item.get('handmade_caption')
-        llm_caption = item.get('llm_caption')
+        handmade_caption = item.get('handmade_caption') or item.get('minimal_caption')
+        llm_caption = item.get('llm_caption') or item.get('contextual_caption')
 
         if not all([handmade_caption, llm_caption]):
             logger.warning(f"Skipping item with missing caption: {item}")
