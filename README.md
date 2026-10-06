@@ -1,6 +1,20 @@
-# Auto-Comp Pipeline: Code Supplement
+# Auto-Comp
 
-This repository contains the anonymized code supplement for the Auto-Comp pipeline, a concept-driven benchmark generator for compositional probing of contrastive vision-language models. The implementation supports the four benchmark families described in the paper:
+**Beyond Bag-of-Words: Diagnosing Compositional Binding Failures in Vision-Language Models**
+*NeurIPS 2026*
+
+[[Paper]](https://arxiv.org/abs/2602.02043) [[Benchmarks on Hugging Face]](https://huggingface.co/AutoComp)
+
+Auto-Comp is a fully automated, concept-driven pipeline for generating compositional benchmarks for contrastive vision-language models such as CLIP and SigLIP. Each concept is rendered as a paired image set from a **Minimal** caption (objects on a plain white background) and an LLM-generated **Contextual** caption (the same objects in a realistic scene). This gives a controlled A/B test that separates core binding ability from visio-linguistic complexity.
+
+For every sample, Auto-Comp produces two kinds of hard negatives:
+
+- **Swap negatives**, which permute attributes or objects (for example, "a red cube and a blue sphere" vs. "a blue cube and a red sphere").
+- **Confusion negatives**, which sample attributes and objects with replacement, producing low-entropy distractors such as repeated objects or repeated colors. Our experiments show these expose failures that go beyond the known bag-of-words limitations.
+
+## Benchmark families
+
+The code supports the four benchmark families described in the paper:
 
 | Task type | Binding family | Vocabulary used | Attribute/relation slots |
 | --- | --- | --- | --- |
@@ -9,35 +23,43 @@ This repository contains the anonymized code supplement for the Auto-Comp pipeli
 | `position` | Relational binding | real objects + spatial relations | `N - 1` relations |
 | `relative_size` | Relational binding | real objects + size relations | `N - 1` relations |
 
-The code generalizes through the shared task registry in `autocomp_tasks.py`. To add another benchmark family, define a new task spec with an object/shape vocabulary, an attribute or relation vocabulary, and a binding type (`attribute` or `relational`). The generation, filtering, Swap, and Confusion logic will then use the correct slot count and hard-negative protocol.
+New families can be added through the shared task registry in `autocomp_tasks.py`. Define a task spec with an object/shape vocabulary, an attribute or relation vocabulary, and a binding type (`attribute` or `relational`). The generation, filtering, Swap, and Confusion logic will then use the correct slot count and hard-negative protocol automatically.
 
-## Benchmarks on Hugging Face
+## Pre-generated benchmarks
 
-Generated benchmark datasets can be hosted on the Hugging Face Hub. The default evaluation configuration assumes this naming pattern:
+All benchmarks used in the paper are available on the Hugging Face Hub at [huggingface.co/AutoComp](https://huggingface.co/AutoComp), following this naming pattern:
 
 ```text
 AutoComp/AutoComp-{Minimal|Contextual|Paired}-N{2|3}-{C|SC|P|RS}
 ```
 
-If your anonymized dataset repository names differ, edit `BENCHMARK_CONFIGS` in `evaluation/evaluate_all_models.py`.
+where `C` = color, `SC` = shape-color, `P` = position, and `RS` = relative size. For example:
+
+```python
+from datasets import load_dataset
+
+ds = load_dataset("AutoComp/AutoComp-Minimal-N2-C")
+```
+
+If you host your own generated benchmarks under different names, edit `BENCHMARK_CONFIGS` in `evaluation/evaluate_all_models.py`.
 
 ## Setup
 
 ```bash
-git clone [URL_TO_ANONYMOUS_REPO]
+git clone [REPO_URL]
 cd [REPO_NAME]
 python -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-On Windows, use the appropriate virtual-environment activation command for your shell.
+On Windows, activate the virtual environment with the command for your shell (e.g. `venv\Scripts\activate`).
 
-## Benchmark Generation Pipeline
+## Generating a benchmark
 
-The pipeline has three required stages and one optional hard-negative materialization stage. Scripts accept `minimal`/`contextual` as paper terminology and `handmade`/`llm` as legacy file-name aliases.
+The pipeline has three required stages and one optional stage for materializing hard negatives. Scripts accept `minimal`/`contextual` (the paper's terminology) as well as `handmade`/`llm` as legacy file-name aliases.
 
-### Step 1: Generate Captions
+### Step 1: Generate captions
 
 ```bash
 cd generation
@@ -50,7 +72,7 @@ python generate_captions.py \
 
 For attribute-binding tasks (`color`, `shape_color`), each concept has `N` attributes. For relational tasks (`position`, `relative_size`), each concept has `N - 1` chained relations.
 
-### Step 2: Generate Images
+### Step 2: Generate images
 
 ```bash
 cd generation
@@ -61,11 +83,11 @@ python generate_images.py \
     --total_segments 4
 ```
 
-The script writes Minimal images to `handmade/` and Contextual images to `llm/`, using the historical file suffixes expected by the filtering scripts.
+`--segment_index` and `--total_segments` let you split generation across multiple jobs or GPUs. Minimal images are written to `handmade/` and Contextual images to `llm/`, matching the file names expected by the filtering scripts.
 
-### Step 3: Validate Generated Data
+### Step 3: Validate generated data
 
-Object presence and optional Minimal background validation:
+Check object presence (and, for Minimal images, the plain background):
 
 ```bash
 cd filtering
@@ -77,7 +99,7 @@ python evaluate_object_presence.py \
     --check_background
 ```
 
-Attribute or relation correctness validation:
+Check attribute or relation correctness:
 
 ```bash
 cd filtering
@@ -89,11 +111,11 @@ python validate_attributes_vqa.py \
     --output_json [path/to/fully_validated_data.json]
 ```
 
-Use `--caption_type contextual` and the `llm/` image folder for Contextual images. Keep `--check_background` only for Minimal images.
+For Contextual images, use `--caption_type contextual` with the `llm/` image folder, and drop `--check_background`.
 
-### Step 4: Optional Offline Hard Negatives
+### Step 4 (optional): Store hard negatives offline
 
-The evaluation scripts generate negatives in real time. To store them in JSON instead:
+The evaluation scripts generate negatives on the fly. To save them to JSON instead:
 
 ```bash
 cd generation
@@ -104,18 +126,20 @@ python generate_swap_confusion.py \
     --caption_source minimal
 ```
 
-Swap negatives use `N! - 1` permutations. Attribute-binding tasks permute attributes over fixed objects/shapes; relational tasks permute objects over fixed relations. Confusion candidates are generated with replacement from the same concept vocabulary, using `N^(2N)` candidates for attribute binding and `N^N * (N - 1)^(N - 1)` candidates for relational binding, including the positive caption.
+Swap negatives use all `N! - 1` permutations. Attribute-binding tasks permute attributes over fixed objects/shapes; relational tasks permute objects over fixed relations.
+
+Confusion candidates are sampled with replacement from the same concept vocabulary, giving `N^(2N)` candidates for attribute binding and `N^N * (N - 1)^(N - 1)` candidates for relational binding (both counts include the positive caption).
 
 ## Evaluation
 
-Configure model and dataset lists in `evaluation/evaluate_all_models.py`, then run:
+To evaluate many models across many benchmarks, configure the model and dataset lists in `evaluation/evaluate_all_models.py` and run:
 
 ```bash
 cd evaluation
 python evaluate_all_models.py
 ```
 
-For a single benchmark:
+To evaluate a single model on a single benchmark:
 
 ```bash
 cd evaluation
@@ -127,3 +151,21 @@ python evaluate_model.py \
     --num_objects [2|3] \
     --caption_source [minimal|contextual]
 ```
+
+## Citation
+
+If you use Auto-Comp or our benchmarks, please cite:
+
+```bibtex
+@inproceedings{[citation_key],
+  title     = {Beyond Bag-of-Words: Diagnosing Compositional Binding Failures in Vision-Language Models},
+  author    = {[Author list]},
+  booktitle = {Advances in Neural Information Processing Systems (NeurIPS)},
+  year      = {2026},
+  url       = {https://arxiv.org/abs/2602.02043}
+}
+```
+
+## License
+
+[License name]. See `LICENSE` for details.
